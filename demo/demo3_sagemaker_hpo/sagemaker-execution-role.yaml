@@ -1,0 +1,59 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Optional SageMaker execution role for the CITS5503 diabetes HPO demo
+
+Parameters:
+  BucketName:
+    Type: String
+    Description: S3 bucket used by the Demo 3 notebook for data and model artifacts.
+  DataPrefix:
+    Type: String
+    Default: cits5503/sagemaker-diabetes-hpo
+
+Resources:
+  SageMakerExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Short-lived teaching role for the CITS5503 SageMaker demo.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - sagemaker.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonSageMakerFullAccess
+      Policies:
+        - PolicyName: DemoBucketAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ListDemoPrefix
+                Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                Resource: !Sub arn:${AWS::Partition}:s3:::${BucketName}
+                Condition:
+                  StringLike:
+                    s3:prefix:
+                      - !Ref DataPrefix
+                      - !Sub ${DataPrefix}/*
+              - Sid: ReadWriteDemoObjects
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:AbortMultipartUpload
+                  - s3:ListMultipartUploadParts
+                Resource: !Sub arn:${AWS::Partition}:s3:::${BucketName}/${DataPrefix}/*
+
+Outputs:
+  BucketName:
+    Description: S3 bucket used by the Demo 3 notebook.
+    Value: !Ref BucketName
+  RoleArn:
+    Description: SageMaker execution role used by the Demo 3 notebook.
+    Value: !GetAtt SageMakerExecutionRole.Arn

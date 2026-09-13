@@ -1,0 +1,119 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: CITS5503 Demo 1 - S3, Lambda, Rekognition, DynamoDB, and CloudWatch
+
+Parameters:
+  UploadPrefix:
+    Type: String
+    Default: uploads/
+    Description: Only objects uploaded under this prefix trigger analysis.
+  MinimumConfidence:
+    Type: Number
+    Default: 70
+    MinValue: 0
+    MaxValue: 100
+
+Globals:
+  Function:
+    Runtime: python3.11
+    Architectures:
+      - x86_64
+    Timeout: 30
+    MemorySize: 256
+    Tracing: Active
+
+Resources:
+  UploadBucket:
+    Type: AWS::S3::Bucket
+    DependsOn: ImageAnalysisFunctionUploadPermission
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:*
+            Function: !GetAtt ImageAnalysisFunction.Arn
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: !Ref UploadPrefix
+
+  LabelsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: image_key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: image_key
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false
+
+  ImageAnalysisFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: app.lambda_handler
+      Description: Analyse uploaded images with Rekognition and store the result.
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref LabelsTable
+          MIN_CONFIDENCE: !Ref MinimumConfidence
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref LabelsTable
+        - Statement:
+            - Sid: AnalyseUploadedImages
+              Effect: Allow
+              Action:
+                - rekognition:DetectLabels
+                - rekognition:DetectFaces
+                - rekognition:DetectText
+                - rekognition:RecognizeCelebrities
+              Resource: '*'
+
+  # SourceAccount avoids a Bucket -> Permission -> Function -> Role -> Bucket cycle.
+  ImageAnalysisFunctionUploadPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ImageAnalysisFunction
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+
+  # Keep bucket access least-privilege, but attach it separately so the Lambda
+  # role can be created before the bucket notification is configured.
+  ImageAnalysisFunctionBucketReadPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: ReadUploadedDemoImages
+      Roles:
+        - !Ref ImageAnalysisFunctionRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ReadImagesFromUploadBucket
+            Effect: Allow
+            Action: s3:GetObject
+            Resource: !Sub ${UploadBucket.Arn}/*
+
+Outputs:
+  UploadBucketName:
+    Description: Upload an image under the uploads/ prefix in this bucket.
+    Value: !Ref UploadBucket
+  LabelsTableName:
+    Value: !Ref LabelsTable
+  FunctionName:
+    Value: !Ref ImageAnalysisFunction
+  LogGroupName:
+    Value: !Sub /aws/lambda/${ImageAnalysisFunction}

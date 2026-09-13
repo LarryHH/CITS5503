@@ -1,0 +1,76 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: CITS5503 Demo 2 - API Gateway, Lambda, and Amazon Bedrock
+
+Parameters:
+  ModelId:
+    Type: String
+    Default: amazon.nova-micro-v1:0
+  MaximumPromptCharacters:
+    Type: Number
+    Default: 4000
+    MinValue: 1
+    MaxValue: 10000
+
+Globals:
+  Function:
+    Runtime: python3.11
+    Architectures:
+      - x86_64
+    Timeout: 30
+    MemorySize: 256
+    Tracing: Active
+
+Resources:
+  BedrockApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: $default
+      CorsConfiguration:
+        AllowOrigins:
+          - '*'
+        AllowHeaders:
+          - content-type
+        AllowMethods:
+          - POST
+          - OPTIONS
+        MaxAge: 300
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 2
+        ThrottlingRateLimit: 1
+
+  GenerateFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: app.lambda_handler
+      Description: Validate an HTTP prompt and invoke a Bedrock foundation model.
+      ReservedConcurrentExecutions: 2
+      Environment:
+        Variables:
+          MODEL_ID: !Ref ModelId
+          MAX_PROMPT_CHARS: !Ref MaximumPromptCharacters
+          ALLOWED_ORIGIN: '*'
+      Policies:
+        - Statement:
+            - Sid: InvokeSelectedFoundationModel
+              Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${ModelId}
+      Events:
+        Generate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref BedrockApi
+            Path: /generate
+            Method: POST
+
+Outputs:
+  GenerateUrl:
+    Description: Public POST endpoint for the short-lived classroom demo.
+    Value: !Sub https://${BedrockApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/generate
+  FunctionName:
+    Value: !Ref GenerateFunction
+  LogGroupName:
+    Value: !Sub /aws/lambda/${GenerateFunction}
